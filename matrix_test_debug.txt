@@ -1,0 +1,23 @@
+Test Configuration:
+Matrix A (4x4):
+[[7 2 4 3]
+ [5 3 7 6]
+ [3 4 2 5]
+ [2 5 4 7]]
+
+Matrix B (4x4):
+[[2 3 3 7]
+ [3 7 3 2]
+ [6 5 6 4]
+ [3 3 5 3]]
+
+Expected Result C (4x4):
+[[53 64 66 78]
+ [79 89 96 87]
+ [45 62 58 52]
+ [64 82 80 61]]
+
+Memory Layout:
+A: 0x10000000 (32 bytes)
+B: 0x10000020 (32 bytes)
+C: 0x10000040 (32 bytes)

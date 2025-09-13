@@ -2,26 +2,24 @@ from pathlib import Path
 
 def get_config():
     return {
-        "batch_size": 1,            # Small batch for long inference testing
-        "num_epochs": 2,            # Fewer epochs due to long computation
+        "batch_size": 8,
+        "num_epochs": 20,
         "lr": 10**-4,
-        "max_train_samples": 1000,  # Fewer samples due to 512-token sequences
-        "seq_len": 1024,            # ULTRA-LONG sequence length (16x longer!)
-        "d_model": 16,              # Optimized for maximum inference time
+        "seq_len": 350,
+        "d_model": 512,
         "datasource": 'Helsinki-NLP/opus-100',
         "lang_src": "en",
         "lang_tgt": "he",
-        "model_folder": "weights_max_compute",
-        "model_basename": "tmodel_max_",
-        "preload": None,  # Don't load previous model
+        "model_folder": "weights",
+        "model_basename": "tmodel_",
+        "preload": "latest",
         "tokenizer_file": "tokenizer_{0}.json",
-        "experiment_name": "runs/tmodel_max_compute",
-        "layers": 6,                # DEEPEST architecture (6 encoder + 6 decoder layers)
-        "heads": 4,                 # 4 attention heads
-        "d_ff": 16,                 # Matched to d_model
+        "experiment_name": "runs/tmodel",
+        "layers": 1,
+        "heads": 1,
         # Vocabulary settings
         "reduced_vocab": True,  # Set to True to use reduced vocabulary
-        "vocab_size": 350,          # Optimized vocabulary size for longest inference
+        "vocab_size": 200,      # Maximum vocabulary size (including special tokens)
         # FPGA acceleration settings
         "use_fpga": False,  # Set to True to enable FPGA acceleration
         "fpga_port": "/dev/ttyUSB0",  # UART port for FPGA communication

@@ -1,0 +1,102 @@
+{
+  "version": "1.0",
+  "truncation": null,
+  "padding": null,
+  "added_tokens": [
+    {
+      "id": 0,
+      "content": "[UNK]",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": true
+    },
+    {
+      "id": 1,
+      "content": "[PAD]",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": true
+    },
+    {
+      "id": 2,
+      "content": "[SOS]",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": true
+    },
+    {
+      "id": 3,
+      "content": "[EOS]",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": true
+    }
+  ],
+  "normalizer": null,
+  "pre_tokenizer": {
+    "type": "Whitespace"
+  },
+  "post_processor": null,
+  "decoder": null,
+  "model": {
+    "type": "WordLevel",
+    "vocab": {
+      "[UNK]": 0,
+      "[PAD]": 1,
+      "[SOS]": 2,
+      "[EOS]": 3,
+      ".": 4,
+      "?": 5,
+      ",": 6,
+      "!": 7,
+      "את": 8,
+      "זה": 9,
+      "אני": 10,
+      "לא": 11,
+      "אתה": 12,
+      "היי": 13,
+      "מה": 14,
+      "'": 15,
+      "-": 16,
+      "כן": 17,
+      "האם": 18,
+      "לך": 19,
+      "לעזאזל": 20,
+      "על": 21,
+      "קדימה": 22,
+      "רוצה": 23,
+      "...": 24,
+      "או": 25,
+      "אוכל": 26,
+      "אין": 27,
+      "אל": 28,
+      "בסדר": 29,
+      "ה": 30,
+      "היא": 31,
+      "היה": 32,
+      "חבר": 33,
+      "טוב": 34,
+      "יש": 35,
+      "לדבר": 36,
+      "לי": 37,
+      "למה": 38,
+      "מוכנה": 39,
+      "עם": 40,
+      "פשוט": 41,
+      "רגע": 42,
+      "של": 43,
+      "שלה": 44,
+      "שלו": 45,
+      "‎": 46
+    },
+    "unk_token": "[UNK]"
+  }
+}
