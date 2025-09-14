@@ -23,9 +23,8 @@ def get_config():
         "reduced_vocab": True,  # Set to True to use reduced vocabulary
         "vocab_size": 350,          # Optimized vocabulary size for longest inference
         # FPGA acceleration settings
-        "use_fpga": False,  # Set to True to enable FPGA acceleration
-        "fpga_port": "/dev/ttyUSB0",  # UART port for FPGA communication
-        "fpga_baudrate": 115200,
+        "use_fpga": True,  # Set to True to enable K5 FPGA acceleration
+        "k5_app_name": "de10_lite_matrix_multiplier",  # K5 application name for matrix multiplication
     }
 
 def get_weights_file_path(config, epoch: str):

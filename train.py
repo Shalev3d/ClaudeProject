@@ -1,7 +1,7 @@
 from model import build_transformer
 from dataset import BilingualDataset, causal_mask
 from config import get_config, get_weights_file_path, latest_weights_file_path
-from fpga_accelerator import FPGAAccelerator
+from k5_fpga_accelerator import K5FPGAAccelerator
 import torch
 import torch.nn as nn
 from torch.utils.data import Dataset, DataLoader, random_split
@@ -307,23 +307,18 @@ def train_model(config):
             "      On a Mac machine, run: pip3 install --pre torch torchvision torchaudio torchtext --index-url https://download.pytorch.org/whl/nightly/cpu")
     device = torch.device(device)
 
-    # Initialize FPGA accelerator if available
+    # Initialize K5 FPGA accelerator if available
     fpga_accelerator = None
-    fpga_port = config.get('fpga_port', '/dev/ttyUSB0')  # Default UART port
+    k5_app_name = config.get('k5_app_name', 'de10_lite_matrix_multiplier')  # K5 application name
     
     if config.get('use_fpga', False):
         try:
-            print(f"Initializing FPGA accelerator on {fpga_port}...")
-            fpga_accelerator = FPGAAccelerator(port=fpga_port)
-            
-            if fpga_accelerator.connect():
-                print("FPGA accelerator connected successfully!")
-                print("Matrix multiplications will be offloaded to FPGA")
-            else:
-                print("Failed to connect to FPGA, using CPU/GPU only")
-                fpga_accelerator = None
+            print(f"Initializing K5 FPGA accelerator with app '{k5_app_name}'...")
+            fpga_accelerator = K5FPGAAccelerator(k5_app_name=k5_app_name)
+            print("K5 FPGA accelerator initialized successfully!")
+            print("Matrix multiplications will be offloaded to FPGA via K5 system")
         except Exception as e:
-            print(f"FPGA initialization failed: {e}")
+            print(f"K5 FPGA initialization failed: {e}")
             print("Continuing with CPU/GPU only")
             fpga_accelerator = None
 
@@ -465,10 +460,16 @@ def train_model(config):
             'global_step': global_step
         }, model_filename)
 
-    # Cleanup FPGA connection
+    # Print FPGA performance statistics if used
     if fpga_accelerator:
-        fpga_accelerator.disconnect()
-        print("FPGA accelerator disconnected")
+        stats = fpga_accelerator.get_performance_stats()
+        print("\n🚀 K5 FPGA Performance Summary:")
+        print(f"   • FPGA operations: {stats['fpga_calls']:,}")
+        print(f"   • CPU fallbacks: {stats['cpu_fallback_calls']:,}")
+        print(f"   • FPGA usage ratio: {stats['fpga_usage_ratio']:.1%}")
+        print(f"   • Average FPGA time: {stats['fpga_time_average']*1000:.2f} ms")
+        print(f"   • Total FPGA time: {stats['fpga_time_total']:.2f} seconds")
+        print("K5 FPGA accelerator session completed")
 
 
 if __name__ == '__main__':

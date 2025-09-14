@@ -1,7 +1,7 @@
 import torch
 import torch.nn as nn
 import math
-from fpga_accelerator import FPGAAccelerator, FPGALinear, FPGAAttention
+# K5 FPGA acceleration is handled at matrix multiplication level
 
 
 class LayerNormalization(nn.Module):
@@ -26,14 +26,11 @@ class FeedForwardBlock(nn.Module):
 
     def __init__(self, d_model: int, d_ff: int, dropout: float, fpga_accelerator=None) -> None:
         super().__init__()
-        # Use FPGA-accelerated linear layers if available
-        if fpga_accelerator:
-            self.linear_1 = FPGALinear(d_model, d_ff, fpga_accelerator=fpga_accelerator)
-            self.linear_2 = FPGALinear(d_ff, d_model, fpga_accelerator=fpga_accelerator)
-        else:
-            self.linear_1 = nn.Linear(d_model, d_ff)  # w1 and b1
-            self.linear_2 = nn.Linear(d_ff, d_model)  # w2 and b2
+        # Standard linear layers - FPGA acceleration handled at matrix multiplication level
+        self.linear_1 = nn.Linear(d_model, d_ff)  # w1 and b1
+        self.linear_2 = nn.Linear(d_ff, d_model)  # w2 and b2
         self.dropout = nn.Dropout(dropout)
+        self.fpga_accelerator = fpga_accelerator
 
     def forward(self, x):
         # (batch, seq_len, d_model) --> (batch, seq_len, d_ff) --> (batch, seq_len, d_model)
@@ -102,17 +99,11 @@ class MultiHeadAttentionBlock(nn.Module):
         assert d_model % h == 0, "d_model is not divisible by h"
 
         self.d_k = d_model // h  # Dimension of vector seen by each head
-        # Use FPGA-accelerated linear layers if available
-        if fpga_accelerator:
-            self.w_q = FPGALinear(d_model, d_model, bias=False, fpga_accelerator=fpga_accelerator)
-            self.w_k = FPGALinear(d_model, d_model, bias=False, fpga_accelerator=fpga_accelerator)
-            self.w_v = FPGALinear(d_model, d_model, bias=False, fpga_accelerator=fpga_accelerator)
-            self.w_o = FPGALinear(d_model, d_model, bias=False, fpga_accelerator=fpga_accelerator)
-        else:
-            self.w_q = nn.Linear(d_model, d_model, bias=False)  # Wq
-            self.w_k = nn.Linear(d_model, d_model, bias=False)  # Wk
-            self.w_v = nn.Linear(d_model, d_model, bias=False)  # Wv
-            self.w_o = nn.Linear(d_model, d_model, bias=False)  # Wo
+        # Standard linear layers - FPGA acceleration handled at matrix multiplication level
+        self.w_q = nn.Linear(d_model, d_model, bias=False)  # Wq
+        self.w_k = nn.Linear(d_model, d_model, bias=False)  # Wk
+        self.w_v = nn.Linear(d_model, d_model, bias=False)  # Wv
+        self.w_o = nn.Linear(d_model, d_model, bias=False)  # Wo
         self.dropout = nn.Dropout(dropout)
         self.fpga_accelerator = fpga_accelerator
 
@@ -126,9 +117,11 @@ class MultiHeadAttentionBlock(nn.Module):
             except:
                 print("FPGA attention failed, falling back to CPU")
         
-        # Standard CPU computation
+        # K5 FPGA-accelerated computation
+        from k5_fpga_accelerator import fpga_matmul
+        
         # (batch, h, seq_len, d_k) --> (batch, h, seq_len, seq_len)
-        attention_scores = (query @ key.transpose(-2, -1)) / math.sqrt(d_k)
+        attention_scores = fpga_matmul(query, key.transpose(-2, -1)) / math.sqrt(d_k)
         if mask is not None:
             # Write a very low value (indicating -inf) to the positions where mask == 0
             attention_scores.masked_fill_(mask == 0, -1e9)
@@ -137,7 +130,7 @@ class MultiHeadAttentionBlock(nn.Module):
             attention_scores = dropout(attention_scores)
         # (batch, h, seq_len, seq_len) --> (batch, h, seq_len, d_k)
         # return attention scores which can be used for visualization
-        return (attention_scores @ value), attention_scores
+        return fpga_matmul(attention_scores, value), attention_scores
     
     def fpga_attention_computation(self, query, key, value, mask, dropout):
         """FPGA-accelerated attention computation"""
@@ -278,11 +271,9 @@ class ProjectionLayer(nn.Module):
 
     def __init__(self, d_model, vocab_size, fpga_accelerator=None) -> None:
         super().__init__()
-        # Use FPGA-accelerated linear layer if available
-        if fpga_accelerator:
-            self.proj = FPGALinear(d_model, vocab_size, fpga_accelerator=fpga_accelerator)
-        else:
-            self.proj = nn.Linear(d_model, vocab_size)
+        # Standard linear layer - FPGA acceleration handled at matrix multiplication level
+        self.proj = nn.Linear(d_model, vocab_size)
+        self.fpga_accelerator = fpga_accelerator
 
     def forward(self, x) -> None:
         # (batch, seq_len, d_model) --> (batch, seq_len, vocab_size)

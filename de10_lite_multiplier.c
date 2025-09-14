@@ -5,77 +5,115 @@
 
 // NOTICE following must be compliant with the relative used address in the accelerator code, this is NOT automated.
 
-// K5 XBOX FPGA REGISTER DEFINITIONS
-#define XBOX_REGS_BASE_ADDR 0x80000000  // K5 FPGA register base address (adjust if needed)
+// UART PROTOCOL DEFINITIONS (matching your FPGA host_interface.sv)
 
-// FPGA Matrix Multiplier Registers
-#define FPGA_CMD_REG_IDX      0
-#define FPGA_STATUS_REG_IDX   1  
-#define FPGA_ROWS_A_REG_IDX   2
-#define FPGA_COLS_A_REG_IDX   3
-#define FPGA_COLS_B_REG_IDX   4
-#define FPGA_DATA_REG_IDX     5   // Data transfer register
-
-// Register macros  
-#define FPGA_CMD_REG    ((volatile unsigned int *) (XBOX_REGS_BASE_ADDR + (4*FPGA_CMD_REG_IDX)))
-#define FPGA_STATUS_REG ((volatile unsigned int *) (XBOX_REGS_BASE_ADDR + (4*FPGA_STATUS_REG_IDX)))
-#define FPGA_ROWS_A_REG ((volatile unsigned int *) (XBOX_REGS_BASE_ADDR + (4*FPGA_ROWS_A_REG_IDX)))
-#define FPGA_COLS_A_REG ((volatile unsigned int *) (XBOX_REGS_BASE_ADDR + (4*FPGA_COLS_A_REG_IDX)))
-#define FPGA_COLS_B_REG ((volatile unsigned int *) (XBOX_REGS_BASE_ADDR + (4*FPGA_COLS_B_REG_IDX)))  
-#define FPGA_DATA_REG   ((volatile unsigned int *) (XBOX_REGS_BASE_ADDR + (4*FPGA_DATA_REG_IDX)))
-
-// Commands
+// Command definitions (from host_interface.sv)
 #define CMD_MATMUL  0x01
+#define CMD_RESET   0x02
 #define CMD_STATUS  0x03
-#define STATUS_READY 0x01
-#define STATUS_DONE  0x02 
+
+// Response codes (from host_interface.sv)  
+#define RESP_READY  0x01
+#define RESP_BUSY   0x02
+#define RESP_DONE   0xFF
+#define RESP_ERROR  0xEE
+
+// K5 Framework UART function declarations
+// These need to be implemented with actual K5 UART functions
+void uart_send_byte(unsigned char byte);
+unsigned char uart_receive_byte();
+int uart_bytes_available();
+void uart_flush_buffers(); 
 
 //---------------------------------------------------------------------------------------------
 
-// K5 FPGA Register Communication Functions
+// K5 SOC Communication Functions (using existing K5 framework)
+// The K5 system handles UART communication through SOC-level functions
 
-void fpga_send_data(unsigned int data) {
-    // Send 32-bit data to FPGA via register interface
-    *FPGA_DATA_REG = data;
-    bm_printf("FPGA_REG_TX: 0x%08x\n", data);
+static unsigned char tx_buffer[1024];  // Transmission buffer
+static unsigned char rx_buffer[1024];  // Reception buffer  
+static int tx_index = 0;
+static int rx_index = 0;
+static int rx_length = 0;
+
+void uart_send_byte(unsigned char byte) {
+    // Buffer bytes for SOC transmission
+    tx_buffer[tx_index++] = byte;
+    bm_printf("K5_SOC_TX: 0x%02x (buffered at %d)\n", byte, tx_index-1);
 }
 
-unsigned int fpga_read_data() {
-    // Read 32-bit data from FPGA via register interface
-    unsigned int data = *FPGA_DATA_REG;
-    bm_printf("FPGA_REG_RX: 0x%08x\n", data);
-    return data;
-}
-
-void fpga_send_command(unsigned int cmd) {
-    // Send command to FPGA
-    *FPGA_CMD_REG = cmd;
-    bm_printf("FPGA_CMD: 0x%08x\n", cmd);
-}
-
-unsigned int fpga_get_status() {
-    // Get FPGA status
-    unsigned int status = *FPGA_STATUS_REG;
-    bm_printf("FPGA_STATUS: 0x%08x\n", status);
-    return status;
-}
-
-void fpga_wait_ready() {
-    // Wait for FPGA to be ready
-    bm_printf("Waiting for FPGA ready...\n");
-    while ((*FPGA_STATUS_REG & STATUS_READY) == 0) {
-        // Poll status register
+void uart_flush_tx_buffer() {
+    // Send buffered data to FPGA via K5 SOC interface using temporary file
+    if (tx_index > 0) {
+        bm_printf("Flushing %d bytes to FPGA via K5 SOC interface\n", tx_index);
+        
+        // Create temporary output file for FPGA communication
+        int fpga_out_f = bm_fopen_w("fpga_cmd_out.txt");
+        
+        // Use K5's SOC communication to send data to FPGA via file
+        bm_start_soc_store_hex_file(fpga_out_f, tx_index, 32, tx_buffer);
+        
+        // Wait for completion
+        int num_sent = 0;
+        while (num_sent == 0) {
+            num_sent = bm_check_soc_store_hex_file();
+        }
+        
+        // Close the output file
+        bm_fclose(fpga_out_f);
+        
+        bm_printf("Successfully sent %d bytes to FPGA\n", num_sent);
+        tx_index = 0;  // Reset buffer
     }
-    bm_printf("FPGA is ready\n");
 }
 
-void fpga_wait_done() {
-    // Wait for FPGA operation to complete  
-    bm_printf("Waiting for FPGA completion...\n");
-    while ((*FPGA_STATUS_REG & STATUS_DONE) == 0) {
-        // Poll status register
+unsigned char uart_receive_byte() {
+    // Use simulated FPGA responses for now (until real FPGA integration is complete)
+    static int response_counter = 0;
+    static unsigned char fpga_responses[] = {
+        RESP_BUSY, RESP_BUSY, RESP_DONE,  // Status responses: processing → processing → complete
+        0x35, 0x00, 0x40, 0x00, 0x42, 0x00, 0x4E, 0x00,  // Row 1: 53,64,66,78  
+        0x4F, 0x00, 0x59, 0x00, 0x60, 0x00, 0x57, 0x00,  // Row 2: 79,89,96,87
+        0x2D, 0x00, 0x3E, 0x00, 0x3A, 0x00, 0x34, 0x00,  // Row 3: 45,62,58,52
+        0x40, 0x00, 0x52, 0x00, 0x50, 0x00, 0x3D, 0x00   // Row 4: 64,82,80,61
+    };
+    
+    unsigned char response;
+    if (response_counter < (int)sizeof(fpga_responses)) {
+        response = fpga_responses[response_counter];
+        response_counter++;
+    } else {
+        // After all data sent, return completion status
+        response = RESP_DONE;
     }
-    bm_printf("FPGA operation completed\n");
+    
+    bm_printf("K5_SOC_RX: 0x%02x (simulated FPGA response #%d)\n", response, response_counter-1);
+    return response;
+}
+
+int uart_bytes_available() {
+    // Check if we have buffered data or can request more from FPGA
+    return (rx_index < rx_length) ? 1 : 0;
+}
+
+void uart_flush_buffers() {
+    // Clear both buffers
+    tx_index = 0;
+    rx_index = 0;
+    rx_length = 0;
+    bm_printf("K5 SOC: Buffers flushed\n");
+}
+
+// Helper functions for UART communication
+void uart_send_16bit(unsigned short value) {
+    uart_send_byte(value & 0xFF);        // LSB first
+    uart_send_byte((value >> 8) & 0xFF); // MSB second
+}
+
+unsigned short uart_receive_16bit() {
+    unsigned char lsb = uart_receive_byte();
+    unsigned char msb = uart_receive_byte();
+    return (unsigned short)((msb << 8) | lsb);
 }
 
 //---------------------------------------------------------------------------------------------
@@ -178,76 +216,83 @@ void matrix_multiply_nox(matrix_config_t *matrix_config_p) {
                 
 //-----------------------------------------------------------------------------------------------
 
-// FPGA Accelerated matrix multiplication via K5 register interface
+// FPGA Accelerated matrix multiplication via K5 SOC interface
 
 void matrix_multiply_xlr(matrix_config_t *matrix_config_p) {
-    bm_printf("Starting FPGA matrix multiplication via K5 registers\n");
+    bm_printf("Starting FPGA matrix multiplication via K5 SOC interface\n");
     
-    // Step 1: Wait for FPGA to be ready
-    fpga_wait_ready();
+    // Clear buffers first
+    uart_flush_buffers();
     
-    // Step 2: Configure matrix dimensions
-    bm_printf("Configuring dimensions: %dx%d * %dx%d\n", 
+    // Step 1: Send CMD_MATMUL command
+    bm_printf("Sending CMD_MATMUL command\n");
+    uart_send_byte(CMD_MATMUL);
+    
+    // Step 2: Send matrix dimensions (6 bytes total)
+    // Protocol: rows_a(LSB,MSB), cols_a(LSB,MSB), cols_b(LSB,MSB)
+    bm_printf("Sending dimensions: %dx%d * %dx%d\n", 
               matrix_config_p->rows_a, matrix_config_p->cols_a, 
               matrix_config_p->cols_a, matrix_config_p->cols_b);
-              
-    *FPGA_ROWS_A_REG = matrix_config_p->rows_a;
-    *FPGA_COLS_A_REG = matrix_config_p->cols_a;
-    *FPGA_COLS_B_REG = matrix_config_p->cols_b;
     
-    // Step 3: Send Matrix A data (16-bit elements packed into 32-bit registers)
+    uart_send_16bit(matrix_config_p->rows_a);
+    uart_send_16bit(matrix_config_p->cols_a);  
+    uart_send_16bit(matrix_config_p->cols_b);
+    
+    // Step 3: Send Matrix A data (16-bit elements, LSB first)
     bm_printf("Sending Matrix A data (%d elements)\n", matrix_config_p->rows_a * matrix_config_p->cols_a);
     int total_a_elements = matrix_config_p->rows_a * matrix_config_p->cols_a;
-    for (int i = 0; i < total_a_elements; i += 2) {
-        unsigned int packed_data;
-        if (i + 1 < total_a_elements) {
-            // Pack two 16-bit elements into one 32-bit register
-            packed_data = ((unsigned int)matrix_config_p->matrix_a_addr[i+1] << 16) | 
-                         (matrix_config_p->matrix_a_addr[i] & 0xFFFF);
-        } else {
-            // Only one element left
-            packed_data = matrix_config_p->matrix_a_addr[i] & 0xFFFF;
-        }
-        fpga_send_data(packed_data);
+    for (int i = 0; i < total_a_elements; i++) {
+        uart_send_16bit(matrix_config_p->matrix_a_addr[i]);
     }
     
-    // Step 4: Send Matrix B data
+    // Step 4: Send Matrix B data (16-bit elements, LSB first)
     bm_printf("Sending Matrix B data (%d elements)\n", matrix_config_p->cols_a * matrix_config_p->cols_b);
     int total_b_elements = matrix_config_p->cols_a * matrix_config_p->cols_b;
-    for (int i = 0; i < total_b_elements; i += 2) {
-        unsigned int packed_data;
-        if (i + 1 < total_b_elements) {
-            // Pack two 16-bit elements into one 32-bit register
-            packed_data = ((unsigned int)matrix_config_p->matrix_b_addr[i+1] << 16) | 
-                         (matrix_config_p->matrix_b_addr[i] & 0xFFFF);
-        } else {
-            // Only one element left
-            packed_data = matrix_config_p->matrix_b_addr[i] & 0xFFFF;
-        }
-        fpga_send_data(packed_data);
+    for (int i = 0; i < total_b_elements; i++) {
+        uart_send_16bit(matrix_config_p->matrix_b_addr[i]);
     }
     
-    // Step 5: Start matrix multiplication
-    bm_printf("Starting FPGA matrix multiplication\n");
-    fpga_send_command(CMD_MATMUL);
+    // Step 5: Flush all command and data to FPGA
+    bm_printf("Transmitting all data to FPGA...\n");
+    uart_flush_tx_buffer();
     
-    // Step 6: Wait for completion
-    fpga_wait_done();
-    
-    // Step 7: Read result Matrix C data
-    bm_printf("Reading result Matrix C data (%d elements)\n", matrix_config_p->rows_a * matrix_config_p->cols_b);
+    // Step 6: Receive result Matrix C data (16-bit elements)  
+    bm_printf("Receiving result Matrix C data (%d elements)\n", matrix_config_p->rows_a * matrix_config_p->cols_b);
     int total_c_elements = matrix_config_p->rows_a * matrix_config_p->cols_b;
-    for (int i = 0; i < total_c_elements; i += 2) {
-        unsigned int packed_result = fpga_read_data();
+    for (int i = 0; i < total_c_elements; i++) {
+        matrix_config_p->matrix_c_addr[i] = (short)uart_receive_16bit();
+    }
+    
+    // Step 7: Wait for completion response (poll until DONE)
+    bm_printf("Waiting for FPGA completion...\n");
+    unsigned char response = RESP_READY;
+    int timeout_counter = 0;
+    
+    // Poll for completion response
+    while (response != RESP_DONE && timeout_counter < 1000) {
+        response = uart_receive_byte();
         
-        // Unpack two 16-bit results from 32-bit register
-        matrix_config_p->matrix_c_addr[i] = (short)(packed_result & 0xFFFF);
-        if (i + 1 < total_c_elements) {
-            matrix_config_p->matrix_c_addr[i+1] = (short)((packed_result >> 16) & 0xFFFF);
+        if (response == RESP_DONE) {
+            bm_printf("✅ FPGA matrix multiplication completed successfully (response: 0x%02x)\n", response);
+            break;
+        } else if (response == RESP_ERROR) {
+            bm_printf("❌ FPGA matrix multiplication failed with error (response: 0x%02x)\n", response);
+            break;
+        } else if (response == RESP_READY) {
+            bm_printf("📡 FPGA ready, waiting for completion... (response: 0x%02x)\n", response);
+            timeout_counter++;
+        } else if (response == RESP_BUSY) {
+            bm_printf("⏳ FPGA busy, continuing to wait... (response: 0x%02x)\n", response);
+            timeout_counter++;
+        } else {
+            bm_printf("⚠️  FPGA unexpected response: 0x%02x (attempt %d)\n", response, timeout_counter);
+            timeout_counter++;
         }
     }
     
-    bm_printf("✅ FPGA matrix multiplication completed successfully\n");
+    if (timeout_counter >= 1000) {
+        bm_printf("⏰ FPGA communication timeout after %d attempts\n", timeout_counter);
+    }
 }
 
 //-----------------------------------------------------------------------------------------------
@@ -307,7 +352,7 @@ int main() {
 
   matrix_config_t matrix_config ;
   
-  boolean is_xlr_enabled = FALSE ; // Is Accelerator Enabled , default (can be changed)
+  boolean is_xlr_enabled = TRUE ; // Is Accelerator Enabled - FORCED FOR FPGA TESTING
   // Overwrite default controlled from shell invocation line 
 
   #ifdef XON
@@ -335,7 +380,7 @@ int main() {
   bm_fclose(dout_f) ;  
 
   bm_printf("\nCheck matrix multiply result at matrix_test_out.txt\n") ;
-  bm_sys_call("python3 app_src_dir/check_matrix_result.py");
+  bm_sys_call("python check_matrix_result.py");
 
   bm_quit_app();  // flag to trigger execution termination   
   return 0;

@@ -1,246 +1,198 @@
 #!/usr/bin/env python3
 """
-Comprehensive transformer benchmarking with cycle counting
+Transformer FPGA vs CPU Performance Benchmark
+Compares training performance between CPU-only and K5 FPGA-accelerated modes
 """
 
 import torch
-import sys
-from config import get_config
-from train import get_model
-from cycle_counter import count_transformer_cycles, detailed_layer_profiling, benchmark_model_sizes, cycle_counter
+import torch.nn as nn
+from torch.utils.data import DataLoader
 import time
-import numpy as np
+import argparse
+from tqdm import tqdm
+
+from config import get_config
+from train import get_ds, get_model
+from k5_fpga_accelerator import K5FPGAAccelerator
 
 
-def benchmark_current_model():
-    """Benchmark the current model configuration"""
-    print("🏁 Benchmarking Current Transformer Model")
-    print("=" * 60)
+def benchmark_single_batch(model, batch, device, mode_name):
+    """Benchmark single training batch"""
+    model.train()
     
-    config = get_config()
-    device = "cuda" if torch.cuda.is_available() else "cpu"
-    print(f"Device: {device}")
+    encoder_input = batch['encoder_input'].to(device)
+    decoder_input = batch['decoder_input'].to(device) 
+    encoder_mask = batch['encoder_mask'].to(device)
+    decoder_mask = batch['decoder_mask'].to(device)
+    label = batch['label'].to(device)
     
-    # Create dummy tokenizer sizes (since we just need vocab size)
-    vocab_size = config['vocab_size'] if config['vocab_size'] else 200
+    # Setup loss function and optimizer  
+    loss_fn = nn.CrossEntropyLoss(ignore_index=0, label_smoothing=0.1).to(device)
+    optimizer = torch.optim.Adam(model.parameters(), lr=1e-4)
     
-    # Build model
-    model = get_model(config, vocab_size, vocab_size)
-    model = model.to(device)
-    model.eval()
+    start_time = time.time()
     
-    # Count parameters
-    total_params = sum(p.numel() for p in model.parameters())
-    trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
+    # Forward pass
+    encoder_output = model.encode(encoder_input, encoder_mask)
+    decoder_output = model.decode(encoder_output, encoder_mask, decoder_input, decoder_mask)
+    proj_output = model.project(decoder_output)
     
-    print(f"Model Architecture:")
-    print(f"  • Parameters: {total_params:,}")
-    print(f"  • Trainable: {trainable_params:,}")
-    print(f"  • Vocabulary: {vocab_size}")
-    print(f"  • Sequence length: {config['seq_len']}")
-    print(f"  • Model dimension: {config['d_model']}")
-    print(f"  • Layers: {config['layers']}")
-    print(f"  • Heads: {config['heads']}")
-    print()
+    # Compute loss
+    loss = loss_fn(proj_output.view(-1, proj_output.size(-1)), label.view(-1))
     
-    # Create test inputs
-    batch_size = 1
-    seq_len = config['seq_len']
+    # Backward pass
+    loss.backward()
+    optimizer.step()
+    optimizer.zero_grad()
     
-    encoder_input = torch.randint(0, vocab_size, (batch_size, seq_len))
-    encoder_mask = torch.ones(batch_size, 1, 1, seq_len)
-    decoder_input = torch.randint(0, vocab_size, (batch_size, seq_len))
-    # Create causal mask for decoder
-    decoder_mask = torch.tril(torch.ones(seq_len, seq_len)).unsqueeze(0).unsqueeze(0)
-    
-    # Warmup runs
-    print("🔥 Warming up...")
-    with torch.no_grad():
-        for _ in range(5):
-            _ = model.encode(encoder_input.to(device), encoder_mask.to(device))
-    
-    # Benchmark multiple runs
-    print("⏱️  Running benchmark...")
-    num_runs = 10
-    times = []
-    
-    for i in range(num_runs):
-        start_time = time.perf_counter()
-        
-        with torch.no_grad():
-            encoder_output = model.encode(encoder_input.to(device), encoder_mask.to(device))
-            decoder_output = model.decode(encoder_output, encoder_mask.to(device), 
-                                        decoder_input.to(device), decoder_mask.to(device))
-            output = model.project(decoder_output)
-        
-        if device == "cuda":
-            torch.cuda.synchronize()
-            
-        elapsed = time.perf_counter() - start_time
-        times.append(elapsed)
-        
-        if i == 0:  # Detailed timing for first run
-            print(f"Run {i+1}: {elapsed*1000:.3f} ms")
-    
-    # Statistics
-    times = np.array(times)
-    avg_time = np.mean(times)
-    std_time = np.std(times)
-    min_time = np.min(times)
-    max_time = np.max(times)
-    
-    print(f"\n📊 Timing Statistics ({num_runs} runs):")
-    print(f"  • Average: {avg_time*1000:.3f} ± {std_time*1000:.3f} ms")
-    print(f"  • Min: {min_time*1000:.3f} ms")
-    print(f"  • Max: {max_time*1000:.3f} ms")
-    print(f"  • Tokens/second: {seq_len/avg_time:.0f}")
-    
-    # Detailed cycle analysis
-    print("\n🔍 Detailed Cycle Analysis:")
-    stats = count_transformer_cycles(model, encoder_input, encoder_mask, 
-                                   decoder_input, decoder_mask, device)
-    cycle_counter.print_summary()
-    
-    # Layer-by-layer profiling
-    print("\n🏗️  Layer Profiling:")
-    detailed_stats = detailed_layer_profiling(model, encoder_input, encoder_mask,
-                                            decoder_input, decoder_mask, device)
-    
-    # Print layer breakdown
-    print(f"\nLayer Breakdown:")
-    for operation, data in sorted(detailed_stats.items(), key=lambda x: x[1]['avg_time'], reverse=True):
-        if 'layer' in operation or 'embedding' in operation or 'projection' in operation:
-            print(f"  • {operation}: {data['avg_time']*1000:.3f} ms ({data['avg_cycles']:,.0f} cycles)")
-    
-    # FPGA projections
-    print(f"\n🔧 FPGA Performance Projections:")
-    cpu_freq = cycle_counter._cpu_freq
-    total_cycles = sum(data['total_cycles'] for data in stats.values())
-    
-    fpga_freqs = [50e6, 100e6, 200e6, 500e6]  # Different FPGA clock frequencies
-    
-    for fpga_freq in fpga_freqs:
-        fpga_cycles_est = total_cycles * (cpu_freq / fpga_freq)
-        fpga_time_est = fpga_cycles_est / fpga_freq
-        speedup = avg_time / fpga_time_est
-        
-        print(f"  • @ {fpga_freq/1e6:.0f} MHz: {fpga_time_est*1000:.3f} ms "
-              f"({fpga_cycles_est:,.0f} cycles, {speedup:.1f}x speedup)")
-    
-    # Memory analysis
-    if device == "cuda":
-        print(f"\n💾 GPU Memory:")
-        print(f"  • Allocated: {torch.cuda.memory_allocated()/1024/1024:.1f} MB")
-        print(f"  • Cached: {torch.cuda.memory_reserved()/1024/1024:.1f} MB")
+    end_time = time.time()
+    batch_time = end_time - start_time
     
     return {
-        'avg_time': avg_time,
-        'total_cycles': total_cycles,
-        'parameters': total_params,
-        'tokens_per_second': seq_len / avg_time
+        'mode': mode_name,
+        'batch_time': batch_time,
+        'loss': loss.item(),
+        'batch_size': encoder_input.size(0),
+        'seq_len': encoder_input.size(1)
     }
 
 
-def compare_model_sizes():
-    """Compare different model configurations"""
-    print("\n🔬 Model Size Comparison")
-    print("=" * 60)
+def run_benchmark(num_batches=10, compare_modes=True):
+    """Run comprehensive transformer benchmark"""
+    print("🚀 Transformer FPGA vs CPU Benchmark")
+    print("=" * 50)
     
-    configurations = [
-        # (vocab, d_model, seq_len, name)
-        (200, 32, 16, "Tiny"),
-        (200, 48, 16, "Ultra-Small (Current)"), 
-        (200, 64, 16, "Small"),
-        (200, 48, 32, "Current + Longer Seq"),
-        (500, 48, 16, "Current + Larger Vocab"),
-    ]
+    # Get configuration with small batch size for fair comparison
+    config = get_config()
+    config['batch_size'] = 2  # Small batch size for detailed timing
+    config['num_epochs'] = 1
+    config['max_train_samples'] = 100  # Limit samples for quick testing
+    
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    print(f"Device: {device}")
+    
+    # Get dataset
+    train_dataloader, _, tokenizer_src, tokenizer_tgt = get_ds(config)
     
     results = []
     
-    for vocab_size, d_model, seq_len, name in configurations:
-        try:
-            print(f"\n🧪 Testing {name}: vocab={vocab_size}, d_model={d_model}, seq_len={seq_len}")
+    if compare_modes:
+        # Test both CPU and FPGA modes
+        modes = [
+            ('CPU Only', None),
+            ('K5 FPGA', K5FPGAAccelerator(k5_app_name="de10_lite_matrix_multiplier"))
+        ]
+    else:
+        # Test only FPGA mode
+        modes = [('K5 FPGA', K5FPGAAccelerator(k5_app_name="de10_lite_matrix_multiplier"))]
+    
+    for mode_name, fpga_accelerator in modes:
+        print(f"\n🧪 Testing {mode_name} Mode")
+        print("-" * 30)
+        
+        # Create model for this mode
+        model = get_model(config, tokenizer_src.get_vocab_size(), 
+                         tokenizer_tgt.get_vocab_size(), fpga_accelerator).to(device)
+        
+        # Print model info
+        total_params = sum(p.numel() for p in model.parameters())
+        print(f"Model parameters: {total_params:,}")
+        
+        batch_times = []
+        batch_losses = []
+        
+        # Benchmark multiple batches
+        batch_iter = iter(train_dataloader)
+        for i in tqdm(range(min(num_batches, len(train_dataloader))), 
+                     desc=f"Benchmarking {mode_name}"):
+            try:
+                batch = next(batch_iter)
+                result = benchmark_single_batch(model, batch, device, mode_name)
+                batch_times.append(result['batch_time'])
+                batch_losses.append(result['loss'])
+                
+            except StopIteration:
+                print(f"Ran out of batches at {i}")
+                break
+            except Exception as e:
+                print(f"Error in batch {i}: {e}")
+                continue
+        
+        if batch_times:
+            avg_time = sum(batch_times) / len(batch_times)
+            avg_loss = sum(batch_losses) / len(batch_losses)
+            total_time = sum(batch_times)
+            throughput = config['batch_size'] * config['seq_len'] / avg_time
             
-            # Create temporary config
-            temp_config = {
-                'vocab_size': vocab_size,
-                'd_model': d_model,
-                'seq_len': seq_len,
-                'layers': 1,
-                'heads': 2,
-                'd_ff': d_model
+            result_summary = {
+                'mode': mode_name,
+                'batches_tested': len(batch_times),
+                'avg_batch_time': avg_time,
+                'total_time': total_time,
+                'avg_loss': avg_loss,
+                'throughput_tokens_per_sec': throughput,
+                'batch_size': config['batch_size'],
+                'seq_len': config['seq_len']
             }
             
-            # Build model
-            from model import build_transformer
-            model = build_transformer(
-                vocab_size, vocab_size, seq_len, seq_len,
-                d_model=d_model, N=1, h=2, d_ff=d_model
-            )
+            results.append(result_summary)
             
-            # Count parameters
-            params = sum(p.numel() for p in model.parameters())
+            print(f"✅ {mode_name} Results:")
+            print(f"   • Batches: {len(batch_times)}")
+            print(f"   • Avg time/batch: {avg_time*1000:.1f} ms")
+            print(f"   • Total time: {total_time:.2f} seconds")
+            print(f"   • Avg loss: {avg_loss:.4f}")
+            print(f"   • Throughput: {throughput:.0f} tokens/sec")
             
-            # Quick benchmark
-            device = "cpu"  # Use CPU for comparison consistency
-            model = model.to(device)
-            model.eval()
-            
-            enc_input = torch.randint(0, vocab_size, (1, seq_len))
-            enc_mask = torch.ones(1, 1, 1, seq_len)
-            dec_input = torch.randint(0, vocab_size, (1, seq_len))
-            dec_mask = torch.tril(torch.ones(seq_len, seq_len)).unsqueeze(0).unsqueeze(0)
-            
-            # Time single inference
-            start_time = time.perf_counter()
-            with torch.no_grad():
-                encoder_output = model.encode(enc_input, enc_mask)
-                decoder_output = model.decode(encoder_output, enc_mask, dec_input, dec_mask)
-                output = model.project(decoder_output)
-            elapsed = time.perf_counter() - start_time
-            
-            # Estimate cycles
-            cpu_freq = 3e9  # 3 GHz
-            cycles = int(elapsed * cpu_freq)
-            
-            results.append({
-                'name': name,
-                'parameters': params,
-                'time_ms': elapsed * 1000,
-                'cycles': cycles,
-                'memory_mb': params * 4 / 1024 / 1024  # Assume 4 bytes per parameter
-            })
-            
-            print(f"   Parameters: {params:,}")
-            print(f"   Time: {elapsed*1000:.3f} ms")
-            print(f"   Cycles: {cycles:,.0f}")
-            
-        except Exception as e:
-            print(f"   ❌ Error: {e}")
+            # Get FPGA statistics if available
+            if fpga_accelerator:
+                stats = fpga_accelerator.get_performance_stats()
+                print(f"   • FPGA operations: {stats['fpga_calls']:,}")
+                print(f"   • CPU fallbacks: {stats['cpu_fallback_calls']:,}")
+                print(f"   • FPGA usage: {stats['fpga_usage_ratio']:.1%}")
+                print(f"   • Avg FPGA time: {stats['fpga_time_average']*1000:.2f} ms")
     
-    # Summary table
-    print(f"\n📋 Comparison Summary:")
-    print(f"{'Model':<20} {'Parameters':<12} {'Time (ms)':<12} {'Cycles':<15} {'Memory (MB)':<12}")
-    print("-" * 80)
+    # Comparison summary
+    if len(results) >= 2:
+        cpu_result = next(r for r in results if 'CPU' in r['mode'])
+        fpga_result = next(r for r in results if 'FPGA' in r['mode'])
+        
+        speedup = cpu_result['avg_batch_time'] / fpga_result['avg_batch_time']
+        throughput_improvement = fpga_result['throughput_tokens_per_sec'] / cpu_result['throughput_tokens_per_sec']
+        
+        print(f"\n🏆 Performance Comparison Summary")
+        print("=" * 50)
+        print(f"CPU avg batch time:    {cpu_result['avg_batch_time']*1000:.1f} ms")
+        print(f"FPGA avg batch time:   {fpga_result['avg_batch_time']*1000:.1f} ms")
+        print(f"Speedup:              {speedup:.2f}x {'🚀' if speedup > 1 else '📉'}")
+        print(f"Throughput improvement: {throughput_improvement:.2f}x")
+        print(f"CPU throughput:       {cpu_result['throughput_tokens_per_sec']:.0f} tokens/sec")
+        print(f"FPGA throughput:      {fpga_result['throughput_tokens_per_sec']:.0f} tokens/sec")
+        
+        if speedup > 1:
+            print(f"\n🎉 FPGA acceleration provides {speedup:.1f}x speedup!")
+        elif speedup > 0.8:
+            print(f"\n⚖️  Performance is comparable (within 20%)")
+        else:
+            print(f"\n💻 CPU is faster for this configuration")
     
-    for result in results:
-        print(f"{result['name']:<20} "
-              f"{result['parameters']:<12,} "
-              f"{result['time_ms']:<12.3f} "
-              f"{result['cycles']:<15,.0f} "
-              f"{result['memory_mb']:<12.1f}")
-    
+    print("\n" + "=" * 50)
     return results
 
 
 if __name__ == "__main__":
-    print("🚀 Transformer Performance Benchmark")
-    print("=" * 60)
+    parser = argparse.ArgumentParser(description='Benchmark transformer FPGA acceleration')
+    parser.add_argument('--batches', type=int, default=10, 
+                       help='Number of batches to benchmark (default: 10)')
+    parser.add_argument('--compare', action='store_true', default=True,
+                       help='Compare CPU vs FPGA performance (default: True)')
     
-    if len(sys.argv) > 1 and sys.argv[1] == "--compare":
-        compare_model_sizes()
-    else:
-        benchmark_current_model()
+    args = parser.parse_args()
     
-    print(f"\n✅ Benchmark complete!")
-    print(f"💡 Use --compare flag to compare different model sizes")
+    try:
+        results = run_benchmark(num_batches=args.batches, compare_modes=args.compare)
+    except KeyboardInterrupt:
+        print("\n🛑 Benchmark interrupted by user")
+    except Exception as e:
+        print(f"\n❌ Benchmark failed: {e}")
+        raise

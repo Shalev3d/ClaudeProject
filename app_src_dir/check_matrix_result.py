@@ -26,15 +26,43 @@ def check_matrix_result():
             expected_data = f.read()
         expected_result = np.frombuffer(expected_data, dtype=np.int16)
         
-        # Load actual result from FPGA
+        # Load actual result from FPGA (K5 outputs in HEX format)
         if not os.path.exists('matrix_test_out.txt'):
             print("❌ ERROR: matrix_test_out.txt not found")
             print("   FPGA computation did not produce output file")
             return False
+        
+        # Read K5 hex format output file
+        try:
+            with open('matrix_test_out.txt', 'r') as f:
+                hex_lines = f.readlines()
             
-        with open('matrix_test_out.txt', 'rb') as f:
-            actual_data = f.read()
-        actual_result = np.frombuffer(actual_data, dtype=np.int16)
+            # Parse hex bytes from K5 format
+            hex_bytes = []
+            for line in hex_lines:
+                line = line.strip()
+                if line:  # Skip empty lines
+                    # Split line into hex byte pairs
+                    hex_pairs = line.split()
+                    for hex_pair in hex_pairs:
+                        if len(hex_pair) == 2:  # Valid 2-digit hex
+                            hex_bytes.append(int(hex_pair, 16))
+            
+            # Convert hex bytes to numpy array
+            actual_data = bytes(hex_bytes)
+            actual_result = np.frombuffer(actual_data, dtype=np.int16)
+            
+        except Exception as e:
+            print(f"❌ ERROR parsing K5 hex output file: {e}")
+            print("   Trying binary format fallback...")
+            # Fallback to binary format
+            try:
+                with open('matrix_test_out.txt', 'rb') as f:
+                    actual_data = f.read()
+                actual_result = np.frombuffer(actual_data, dtype=np.int16)
+            except Exception as e2:
+                print(f"❌ ERROR with binary fallback: {e2}")
+                return False
         
         print(f"Expected result length: {len(expected_result)} elements")
         print(f"Actual result length: {len(actual_result)} elements")
